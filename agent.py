@@ -23,7 +23,7 @@ WEIGHT_DECAY = 0        # L2 weight decay
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-class Agent():
+class DDPGAgent():
     """Interacts with and learns from the environment."""
     
     def __init__(self, state_size, action_size, seed=0):
@@ -76,7 +76,6 @@ class Agent():
         """
         # get the default brain
         brain_name = env.brain_names[0]
-        brain = env.brains[brain_name]
         # last 100 scores
         scores_deque = deque(maxlen=100)
         # list containing scores from each episode
@@ -85,26 +84,39 @@ class Agent():
         avg_scores = []
         # for each episode
         for i_episode in range(1, n_episodes+1):
-            state = env.reset()
-            agent.reset()
+            # reset environment
+            env_info = env.reset(train_mode=True)[brain_name]
+            state = env_info.vector_observations[0]
+            # reset noise
+            self.reset()
             score = 0
+            # for each timepoint
             for t in range(max_t):
-                action = agent.act(state)
-                next_state, reward, done, _ = env.step(action)
-                agent.step(state, action, reward, next_state, done)
+                # agent action
+                action = self.act(state)
+                # get the next state
+                env_info = env.step(action)[brain_name]
+                next_state = env_info.vector_observations[0]
+                # get the reward
+                reward = env_info.rewards[0] 
+                # see if episode has finished
+                done = env_info.local_done[0]
+                self.step(state, action, reward, next_state, done)
                 state = next_state
                 score += reward
                 if done:
                     break 
+            # save most recent score
             scores_deque.append(score)
             scores.append(score)
+            avg_scores.append(np.mean(scores_window))
             print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, np.mean(scores_deque)), end="")
             torch.save(agent.actor_local.state_dict(), 'checkpoint_actor.pth')
             torch.save(agent.critic_local.state_dict(), 'checkpoint_critic.pth')
             if i_episode % 100 == 0:
                 print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, np.mean(scores_deque)))
             
-    return scores
+        return scores, avg_scores
 
     def act(self, state, add_noise=True):
         """Returns actions for given state as per current policy."""
