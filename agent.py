@@ -5,28 +5,30 @@ DDPG Agent Class
 import numpy as np
 import random
 from collections import deque
+import os
 
 from model import Actor, Critic
 from utils import OUNoise, ReplayBuffer
 
 import torch
-import torch.nn.functional as F
 import torch.optim as optim
+import torch.nn.functional as F
 
-BUFFER_SIZE = int(1e5)  # replay buffer size
+BUFFER_SIZE = int(1e6)  # replay buffer size
 BATCH_SIZE = 128        # minibatch size
 GAMMA = 0.99            # discount factor
 TAU = 1e-3              # for soft update of target parameters
 LR_ACTOR = 1e-4         # learning rate of the actor 
 LR_CRITIC = 1e-3        # learning rate of the critic
-WEIGHT_DECAY = 0        # L2 weight decay
+LEARN_EVERY = 20        # learning timestep interval
+LEARN_NUM = 10          # number of learning passes
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-class DDPGAgent():
+class Agent():
     """Interacts with and learns from the environment."""
     
-    def __init__(self, state_size, action_size, seed=0):
+    def __init__(self, state_size, action_size, seed=0, lr_actor=LR_ACTOR, lr_critic=LR_CRITIC, gamma=GAMMA):
         """Initialize an Agent object.
         
         Params
@@ -38,85 +40,97 @@ class DDPGAgent():
         self.state_size = state_size
         self.action_size = action_size
         self.seed = random.seed(seed)
+        self.gamma = gamma
 
         # Actor Network (w/ Target Network)
         self.actor_local = Actor(state_size, action_size, seed).to(device)
         self.actor_target = Actor(state_size, action_size, seed).to(device)
-        self.actor_optimizer = optim.Adam(self.actor_local.parameters(), lr=LR_ACTOR)
+        self.actor_optimizer = optim.Adam(self.actor_local.parameters(), lr=lr_actor)
 
         # Critic Network (w/ Target Network)
         self.critic_local = Critic(state_size, action_size, seed).to(device)
         self.critic_target = Critic(state_size, action_size, seed).to(device)
-        self.critic_optimizer = optim.Adam(self.critic_local.parameters(), lr=LR_CRITIC, weight_decay=WEIGHT_DECAY)
+        self.critic_optimizer = optim.Adam(self.critic_local.parameters(), lr=lr_critic)
 
         # Noise process
         self.noise = OUNoise(action_size, seed)
 
         # Replay memory
-        self.memory = ReplayBuffer(action_size, BUFFER_SIZE, BATCH_SIZE, seed)
+        self.memory = ReplayBuffer(action_size, BUFFER_SIZE, BATCH_SIZE, seed, device)
     
-    def step(self, state, action, reward, next_state, done):
+    def step(self, state, action, reward, next_state, done, tstep):
         """Save experience in replay memory, and use random sample from buffer to learn."""
         # Save experience / reward
         self.memory.add(state, action, reward, next_state, done)
 
         # Learn, if enough samples are available in memory
-        if len(self.memory) > BATCH_SIZE:
-            experiences = self.memory.sample()
-            self.learn(experiences, GAMMA)
+        if len(self.memory) > BATCH_SIZE and tstep % LEARN_EVERY == 0:
+            for _ in range(LEARN_NUM):
+                experiences = self.memory.sample()
+                self.learn(experiences)
             
-    def train(env, n_episodes=1000, max_t=300):
+    def train(self, env, n_episodes=500, max_t=1000, checkpoint_path='./checkpoints/'):
         """Deep Deterministic Policy Gradient (DDPG) Learning.
 
         Params
         ======
-            env (UnityEnvironment): Bananas environment
+            env (UnityEnvironment): Unity environment
             n_episodes (int): maximum number of training episodes
             max_t (int): maximum number of timesteps per episode
         """
+        # create checkpoints folder if necessary
+        if not os.path.exists(checkpoint_path): os.makedirs(checkpoint_path)
         # get the default brain
         brain_name = env.brain_names[0]
+        env_info = env.reset(train_mode=True)[brain_name]
+        num_agents = len(env_info.agents)
         # last 100 scores
         scores_deque = deque(maxlen=100)
         # list containing scores from each episode
-        scores = []
+        all_scores = []
         # list containing window averaged scores
         avg_scores = []
         # for each episode
         for i_episode in range(1, n_episodes+1):
             # reset environment
             env_info = env.reset(train_mode=True)[brain_name]
-            state = env_info.vector_observations[0]
+            states = env_info.vector_observations
             # reset noise
             self.reset()
-            score = 0
+            scores = np.zeros(num_agents) 
             # for each timepoint
             for t in range(max_t):
                 # agent action
-                action = self.act(state)
+                actions = self.act(states)
                 # get the next state
-                env_info = env.step(action)[brain_name]
-                next_state = env_info.vector_observations[0]
+                env_info = env.step(actions)[brain_name]
+                next_states = env_info.vector_observations
                 # get the reward
-                reward = env_info.rewards[0] 
-                # see if episode has finished
-                done = env_info.local_done[0]
-                self.step(state, action, reward, next_state, done)
-                state = next_state
-                score += reward
-                if done:
+                rewards = env_info.rewards
+                # see if lde has finished
+                dones = env_info.local_done
+                # step
+                for state, action, reward, next_state, done in zip(states, actions, rewards, next_states, dones):
+                    self.step(state, action, reward, next_state, done, t)
+                states = next_states
+                scores += rewards
+                if np.any(dones):
                     break 
             # save most recent score
-            scores_deque.append(score)
-            scores.append(score)
-            avg_scores.append(np.mean(scores_window))
-            print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, np.mean(scores_deque)), end="")
-            torch.save(agent.actor_local.state_dict(), 'checkpoint_actor.pth')
-            torch.save(agent.critic_local.state_dict(), 'checkpoint_critic.pth')
-            if i_episode % 100 == 0:
+            avg_score = np.mean(scores)
+            scores_deque.append(avg_score)
+            all_scores.append(avg_score)
+            avg_scores.append(np.mean(scores_deque))
+            print('\rEpisode {}\tScore: {:.2f}\tAverage Score: {:.2f}'.format(i_episode, avg_score, np.mean(scores_deque)), end="")
+            if i_episode % 25 == 0:
                 print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, np.mean(scores_deque)))
+            if np.mean(scores_deque)>=30.0:
+                print('\nEnvironment solved in {:d} episodes!\tAverage Score: {:.2f}'.format(i_episode-100, np.mean(scores_deque)))
+                torch.save(self.actor_local.state_dict(), checkpoint_path+'checkpoint_actor.pth')
+                torch.save(self.critic_local.state_dict(), checkpoint_path+'checkpoint_critic.pth')
+                break
             
-        return scores, avg_scores
+        return all_scores, avg_scores
 
     def act(self, state, add_noise=True):
         """Returns actions for given state as per current policy."""
@@ -132,7 +146,7 @@ class DDPGAgent():
     def reset(self):
         self.noise.reset()
 
-    def learn(self, experiences, gamma):
+    def learn(self, experiences):
         """Update policy and value parameters using given batch of experience tuples.
         Q_targets = r + γ * critic_target(next_state, actor_target(next_state))
         where:
@@ -142,7 +156,6 @@ class DDPGAgent():
         Params
         ======
             experiences (Tuple[torch.Tensor]): tuple of (s, a, r, s', done) tuples 
-            gamma (float): discount factor
         """
         states, actions, rewards, next_states, dones = experiences
 
@@ -151,13 +164,14 @@ class DDPGAgent():
         actions_next = self.actor_target(next_states)
         Q_targets_next = self.critic_target(next_states, actions_next)
         # Compute Q targets for current states (y_i)
-        Q_targets = rewards + (gamma * Q_targets_next * (1 - dones))
+        Q_targets = rewards + (self.gamma * Q_targets_next * (1 - dones))
         # Compute critic loss
         Q_expected = self.critic_local(states, actions)
         critic_loss = F.mse_loss(Q_expected, Q_targets)
         # Minimize the loss
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.critic_local.parameters(), 1)
         self.critic_optimizer.step()
 
         # ---------------------------- update actor ---------------------------- #
@@ -173,6 +187,8 @@ class DDPGAgent():
         self.soft_update(self.critic_local, self.critic_target, TAU)
         self.soft_update(self.actor_local, self.actor_target, TAU)                     
 
+        self.reset()
+        
     def soft_update(self, local_model, target_model, tau):
         """Soft update model parameters.
         θ_target = τ*θ_local + (1 - τ)*θ_target
