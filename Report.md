@@ -20,7 +20,7 @@ The hyperparameters were set to:
 
 The goal of this model is to gain an average final reward of at least +30 over 100 episodes. The graph below show's the reward of the DDPG agent at each timepoint and also averaged across 100 episodes.
 
-![model_training](https://github.com/mbluestone/continuous_control_rl/blob/master/img/model_training.png)
+![model_training](https://github.com/mbluestone/continuous-control-rl/blob/master/img/model_training.png)
 
 Using 20 simultaneous arms, the model learns very quickly: it only takes 99 episodes to learn this environment.
 
