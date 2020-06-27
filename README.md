@@ -80,7 +80,7 @@ A `checkpoint_actor.pth` file and a `checkpoint_critic.pth` file will automatica
 
 My model training is completed in `model_training.ipynb`.
 
-### Loading a Pre-Trained DQN Agent
+### Loading a Pre-Trained DDPG Agent
 
 To train your own agent, you must first initialize the Bananas environment and Agent instance like above. Make sure that the parameters of the new Agent instance match those that were used for training.
 
